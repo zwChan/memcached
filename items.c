@@ -102,7 +102,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
 
     mutex_lock(&cache_lock);
     /* do a quick check if we have any expired items in the tail.. */
-    int tries = 5;
+    int tries = 1;
     int tried_alloc = 0;
     item *search;
     void *hold_lock = NULL;
