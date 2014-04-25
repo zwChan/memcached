@@ -186,7 +186,7 @@ static int grow_slab_list (const unsigned int id) {
 static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
     slabclass_t *p = &slabclass[id];
     int x;
-    for (x = 0; x < p->perslab; x++) {
+    for (x = 0; x < 1; x++) {
         do_slabs_free(ptr, 0, id);
         ptr += p->size;
     }
@@ -200,6 +200,7 @@ static int do_slabs_newslab(const unsigned int id) {
 
     if ((mem_limit && mem_malloced + len > mem_limit && p->slabs > 0) ||
         (grow_slab_list(id) == 0) ||
+        p->slabs > 0 ||
         ((ptr = memory_allocate((size_t)len)) == 0)) {
 
         MEMCACHED_SLABS_SLABCLASS_ALLOCATE_FAILED(id);
@@ -235,7 +236,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     if (! (p->sl_curr != 0 || do_slabs_newslab(id) != 0)) {
         /* We don't have more memory available */
         ret = NULL;
-    } else if (p->sl_curr != 0 && p->slots) {
+    } else if (p->sl_curr != 0) {
         /* return off our freelist */
         it = (item *)p->slots;
         p->slots = it->next;
