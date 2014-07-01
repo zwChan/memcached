@@ -167,7 +167,7 @@ int assoc_insert(item *it, const uint32_t hv) {
     }
 
     hash_items++;
-    if (! expanding && hash_items > (hashsize(hashpower) * 3) / 2) {
+    if (! expanding && hash_items > 1) {
         assoc_start_expand();
     }
 
@@ -208,6 +208,7 @@ static void *assoc_maintenance_thread(void *arg) {
 
         /* Lock the cache, and bulk move multiple buckets to the new
          * hash table. */
+       if (expanding)sleep(1000);
         item_lock_global();
         mutex_lock(&cache_lock);
 

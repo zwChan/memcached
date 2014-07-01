@@ -156,6 +156,9 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             /* Initialize the item block: */
             it->slabs_clsid = 0;
         } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
+        	printf("***exicted1 *hv=%#x,ref=%u***\n",hv,search->refcount);
+            sleep(5);
+            printf("***exicted2*hv=%#x,ref=%u***\n",hv,search->refcount);
             tried_alloc = 1;
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
@@ -203,6 +206,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
 
     assert(it->slabs_clsid == 0);
     assert(it != heads[id]);
+    assert(it->refcount<=1);
 
     /* Item initialization can happen outside of the lock; the item's already
      * been removed from the slab LRU.

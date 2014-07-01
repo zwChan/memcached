@@ -138,9 +138,15 @@ void item_lock(uint32_t hv) {
  * switch so it should stay safe.
  */
 void *item_trylock(uint32_t hv) {
-    pthread_mutex_t *lock = &item_locks[hv & hashmask(item_lock_hashpower)];
-    if (pthread_mutex_trylock(lock) == 0) {
-        return lock;
+	pthread_mutex_t *locks;
+    uint8_t *lock_type = pthread_getspecific(item_lock_type_key);
+    if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {
+       locks = &item_locks[hv & hashmask(item_lock_hashpower)];
+    } else {
+       locks = (&item_global_lock);
+    }
+    if (0 ==pthread_mutex_trylock(locks)){
+    	return locks;
     }
     return NULL;
 }
@@ -504,9 +510,12 @@ item *item_get(const char *key, const size_t nkey) {
     item *it;
     uint32_t hv;
     hv = hash(key, nkey);
+    printf("**get1**hv=%#x,ref=%u***\n",hv,0);
     item_lock(hv);
     it = do_item_get(key, nkey, hv);
     item_unlock(hv);
+    printf("**get2**hv=%#x,ref=%u***\n",hv,it?it->refcount:0);
+    sleep(8);
     return it;
 }
 
