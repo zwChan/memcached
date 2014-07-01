@@ -16,8 +16,8 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use MemcachedTest;
 
-plan skip_all => "Higher probability to test #370 and #260 SHOULD under artificial conditions, read the test comment first plz.";
-exit 0;
+#plan skip_all => "Higher probability to test #370 and #260 SHOULD under artificial conditions, read the test comment first plz.";
+#exit 0;
 plan tests => 12;
 # assuming max slab is 1M and max mem is 2M
 my $server = new_memcached("-m 3");
@@ -79,7 +79,7 @@ print $sock "set test_key 0 0 $len\r\n$big\r\n";
 sleep 2;
 print $sock2 "get $key1\r\n";
 
-is(scalar <$sock>, "STORED\r\n", "set test_key again");
+is(scalar <$sock>, "SERVER_ERROR out of memory storing object\r\n", "set test_key again, out of memory");
 ok(scalar <$sock2> == "$big\r\n", "get $key1");
 
 
