@@ -79,14 +79,15 @@ print $sock "set test_key 0 0 $len\r\n$big\r\n";
 sleep 2;
 print $sock2 "get $key1\r\n";
 
-is(scalar <$sock>, "SERVER_ERROR out of memory storing object\r\n", "set test_key again, out of memory");
-ok(scalar <$sock2> == "$big\r\n", "get $key1");
+is(scalar <$sock>, "STORED\r\n", "set test_key again, ok");
+is(scalar <$sock2>, "END\r\n", "get $key1, get null");
 
 
 =ps
 output should like this
 ##########
 [root@jason-2 memcached]# perl t/issue_370.t 
+
 1..12
 ok 1
 ok 2
@@ -99,17 +100,16 @@ ok 6 - no evictions to start
 ok 7 - stored other_key2
 ok 8 - some evictions happened
 ok 9 - hash expanding happened
-**get1**hv=0x82dddc74,ref=0***
-**get2**hv=0x82dddc74,ref=0***
+**get1**hv=0x82dddc74***
+**get2*it=(nil)*hv=0x82dddc74,ref=0***
 ok 10 - other_key == <undef>
 ***exicted1 *hv=0xd994db22,ref=2***
-**get1**hv=0xd994db22,ref=0***
-**get2**hv=0xd994db22,ref=3***
-***exicted2*hv=0xd994db22,ref=3***
-ok 11 - set test_key again
-ok 12 - get Y_ORDER_225426358_02
-memcached-debug: items.c:233: item_free: Assertion `(it->it_flags & 1) == 0' failed.
-[root@jason-2 memcached]# 
+**get1**hv=0xd994db22***
+***exicted2*hv=0xd994db22,ref=2***
+**get2*it=(nil)*hv=0xd994db22,ref=0***
+ok 11 - set test_key again, ok
+ok 12 - get Y_ORDER_225426358_02, get null
+SIGINT handled.
 
 ###################
 
@@ -175,6 +175,25 @@ index ba56e5f..733274c 100644
 +    printf("**get2**hv=%#x,ref=%u***\n",hv,it?it->refcount:0);
 +    sleep(8);
      return it;
+ }
+diff --git a/thread.c b/thread.c
+index 0b2040c..e93bfbb 100644
+--- a/thread.c
++++ b/thread.c
+@@ -126,6 +126,7 @@ void item_lock(uint32_t hv) {
+     if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {
+         mutex_lock(&item_locks[hv & hashmask(item_lock_hashpower)]);
+     } else {
++        mutex_lock(&item_locks[hv & hashmask(item_lock_hashpower)]);
+         mutex_lock(&item_global_lock);
+     }
+ }
+@@ -158,6 +159,7 @@ void item_unlock(uint32_t hv) {
+         mutex_unlock(&item_locks[hv & hashmask(item_lock_hashpower)]);
+     } else {
+         mutex_unlock(&item_global_lock);
++        mutex_unlock(&item_locks[hv & hashmask(item_lock_hashpower)]);
+     }
  }
  
 [root@jason-2 memcached]# 
