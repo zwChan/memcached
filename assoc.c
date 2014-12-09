@@ -128,7 +128,7 @@ static void assoc_expand(void) {
 
 
     if (hash_items < hashsize(hashpower)){
-    	hashpower_delta = -1;
+        hashpower_delta = -1;
     }
 
     primary_hashtable = calloc(hashsize(hashpower + hashpower_delta), sizeof(void *));

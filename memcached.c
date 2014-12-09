@@ -180,6 +180,7 @@ static void stats_init(void) {
     stats.hash_power_level = stats.hash_bytes = stats.hash_is_expanding = 0;
     stats.expired_unfetched = stats.evicted_unfetched = 0;
     stats.slabs_moved = 0;
+    stats.slabs_freed = 0;
     stats.accepting_conns = true; /* assuming we start in this state. */
     stats.slab_reassign_running = false;
     stats.lru_crawler_running = false;
@@ -239,6 +240,7 @@ static void settings_init(void) {
     settings.shutdown_command = false;
     settings.tail_repair_time = TAIL_REPAIR_TIME_DEFAULT;
     settings.flush_enabled = true;
+    settings.release_mem_sleep = 30;
 }
 
 /*
@@ -2616,6 +2618,7 @@ static void server_stats(ADD_STAT add_stats, conn *c) {
     if (settings.slab_reassign) {
         APPEND_STAT("slab_reassign_running", "%u", stats.slab_reassign_running);
         APPEND_STAT("slabs_moved", "%llu", stats.slabs_moved);
+        APPEND_STAT("slabs_freed", "%llu", stats.slabs_freed);
     }
     if (settings.lru_crawler) {
         APPEND_STAT("lru_crawler_running", "%u", stats.lru_crawler_running);
@@ -3384,7 +3387,7 @@ static void process_slabs_automove_command(conn *c, token_t *tokens, const size_
     level = strtoul(tokens[2].value, NULL, 10);
     if (level == 0) {
         settings.slab_automove = 0;
-    } else if (level == 1 || level == 2) {
+    } else if (level == 1 || level == 2 || level == 3) {
         settings.slab_automove = level;
     } else {
         out_string(c, "ERROR");
@@ -4800,6 +4803,15 @@ static void usage(void) {
            "                table should be. Can be grown at runtime if not big enough.\n"
            "                Set this based on \"STAT hash_power_level\" before a \n"
            "                restart.\n"
+           "              - slab_reassign: Enable the feature of slabs rebalance,\n"
+           "                including command of 'slab reassign' and 'automove'\n"
+           "              - slab_automove: Enable the feature of slabs auto rebalance when evicted happen.\n"
+           "                Slab_reassign should be enable at the same time.\n"
+           "                1: Rebalance when detect evicted happan, using a timer (1s interval).\n"
+           "                2: Rebalance when evicted happen;\n"
+           "                3: Release memory to system if too many(more than 2/3) items is free in slabs,\n"
+           "                   lru_crawler should enable at the same time.\n"
+    	   "              - release_mem_sleep: Second to sleep between release memory."
            "              - tail_repair_time: Time in seconds that indicates how long to wait before\n"
            "                forcefully taking over the LRU tail item whose refcount has leaked.\n"
            "                The default is 3 hours.\n"
@@ -5052,7 +5064,8 @@ int main (int argc, char **argv) {
         HASH_ALGORITHM,
         LRU_CRAWLER,
         LRU_CRAWLER_SLEEP,
-        LRU_CRAWLER_TOCRAWL
+        LRU_CRAWLER_TOCRAWL,
+        RELEASE_MEM_SLEEP,
     };
     char *const subopts_tokens[] = {
         [MAXCONNS_FAST] = "maxconns_fast",
@@ -5064,6 +5077,7 @@ int main (int argc, char **argv) {
         [LRU_CRAWLER] = "lru_crawler",
         [LRU_CRAWLER_SLEEP] = "lru_crawler_sleep",
         [LRU_CRAWLER_TOCRAWL] = "lru_crawler_tocrawl",
+        [RELEASE_MEM_SLEEP] = "release_mem_sleep",
         NULL
     };
 
@@ -5076,6 +5090,9 @@ int main (int argc, char **argv) {
 
     /* init settings */
     settings_init();
+
+    /* Run regardless of initializing it later */
+    init_lru_crawler();
 
     /* set stderr non-buffering (for running under, say, daemontools) */
     setbuf(stderr, NULL);
@@ -5334,11 +5351,22 @@ int main (int argc, char **argv) {
                     break;
                 }
                 settings.slab_automove = atoi(subopts_value);
-                if (settings.slab_automove < 0 || settings.slab_automove > 2) {
-                    fprintf(stderr, "slab_automove must be between 0 and 2\n");
+                if (settings.slab_automove < 0 || settings.slab_automove > 3) {
+                    fprintf(stderr, "slab_automove must be between 0 and 3\n");
                     return 1;
                 }
                 break;
+            case RELEASE_MEM_SLEEP:
+                if (subopts_value == NULL) {
+                     fprintf(stderr, "Missing numeric argument for release_mem_sleep\n");
+                     return 1;
+                 }
+                 settings.release_mem_sleep = atoi(subopts_value);
+                 if (settings.release_mem_sleep < 30) {
+                     fprintf(stderr, "Warning: Take care to set release_mem_sleep to less than 30 seconds.\n");
+                     //return 1;
+                 }
+                 break;
             case TAIL_REPAIR_TIME:
                 if (subopts_value == NULL) {
                     fprintf(stderr, "Missing numeric argument for tail_repair_time\n");
@@ -5535,7 +5563,10 @@ int main (int argc, char **argv) {
         perror("failed to ignore SIGPIPE; sigaction");
         exit(EX_OSERR);
     }
-    /* start up worker threads if MT mode */
+
+
+
+   /* start up worker threads if MT mode */
     thread_init(settings.num_threads, main_base);
 
     if (start_assoc_maintenance_thread() == -1) {
@@ -5547,8 +5578,6 @@ int main (int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-    /* Run regardless of initializing it later */
-    init_lru_crawler();
 
     /* initialise clock event */
     clock_handler(0, 0, 0);
