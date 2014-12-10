@@ -621,7 +621,8 @@ static void slab_rebalance_finish(void) {
     if (slab_rebal.d_clsid == -1){
         free(slab_rebal.slab_start);
         mem_malloced -= settings.item_size_max; /*same as do_slabs_newslab*/
-        if (3*s_cls->sl_curr/s_cls->perslab <= s_cls->slabs){
+        if (s_cls->slabs>0 && 100*s_cls->sl_curr/s_cls->perslab/s_cls->slabs
+             > (100-settings.release_mem_stop)){
             /*clean the rebalance flag to stop release memory to system*/
             s_cls->status_flag &= ~SLAB_ST_REBALANCE;
         }
@@ -669,10 +670,11 @@ static int slab_free_memory_decision(int *src) {
     int ret = 0;
     static int cur = POWER_SMALLEST - 1;
     int tries = power_largest - POWER_SMALLEST + 1;
-    rel_time_t last_release = 0;
+    static rel_time_t last_release = 0;
+    int free_ratio=0;
 
     if (last_release + settings.release_mem_sleep> current_time)
-    	return ret;
+        return ret;
 
     if (settings.slab_automove != 3)
         return ret;
@@ -685,19 +687,20 @@ static int slab_free_memory_decision(int *src) {
         cur++;
         if (cur > power_largest)
             cur = POWER_SMALLEST;
-
-        /* check free slab to release memory to system. start when 2/3 of items
-         * are free, and stop when 1/3 of items are free.
-         * if  slabs>2
-         *     and (more than 2/3 of the items are free
-         *        or (rebalancing and more than 1/3 of items are free)
+        if (slabclass[cur].slabs<=1 || slabclass[cur].perslab<1)
+            continue;
+        /* check free slab to release memory to system. start when startPercent of items
+         * are free, and stop when stopPercent of items are free.
+         * if  slabs>1
+         *     and (more than startPercent of the items are free
+         *        or (rebalancing and more than stopPercent of items are free)
          * then
          *     the slab class should try to free memory
          * */
-        if (slabclass[cur].slabs > 2
-            && (3*slabclass[cur].sl_curr/slabclass[cur].perslab > 2*slabclass[cur].slabs
+        free_ratio = 100*slabclass[cur].sl_curr/slabclass[cur].perslab/slabclass[cur].slabs;
+        if (free_ratio>(100-settings.release_mem_start)
                 || ((slabclass[cur].status_flag & SLAB_ST_REBALANCE)
-                    && 3*slabclass[cur].sl_curr/slabclass[cur].perslab > slabclass[cur].slabs))){
+                    && free_ratio > (100-settings.release_mem_stop))){
             ret = 1;
             *src = cur;
             last_release = current_time;
@@ -781,7 +784,7 @@ static int slab_automove_decision(int *src, int *dst) {
  * go to sleep if locks are contended
  */
 static void *slab_maintenance_thread(void *arg) {
-    int src, dest, tick;
+    int src, dest, lru_ts=current_time;
 
     while (do_run_slab_thread) {
         if (settings.slab_automove == 1 || settings.slab_automove == 3) {
@@ -792,15 +795,16 @@ static void *slab_maintenance_thread(void *arg) {
             }else if (slab_free_memory_decision(&src)){
                 slabs_reassign(src, -1);
             }
-
-            if (settings.slab_automove == 3 && settings.lru_crawler && ++tick%6==0){
-            	lru_crawler_crawl("all");
-            }
             sleep(1);
         } else {
             /* Don't wake as often if we're not enabled.
              * This is lazier than setting up a condition right now. */
             sleep(5);
+        }
+        if (settings.lru_crawler && settings.lru_crawler_interval>0
+                && lru_ts+settings.lru_crawler_interval<current_time){
+            lru_ts = current_time;
+            lru_crawler_crawl("all");
         }
     }
     return NULL;

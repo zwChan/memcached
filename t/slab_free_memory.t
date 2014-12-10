@@ -2,19 +2,22 @@
 
 use strict;
 use warnings;
-use Test::More tests => 106;
+use Test::More tests => 110;
 use FindBin qw($Bin);
 use lib "$Bin/lib";
 use MemcachedTest;
 
-my $server = new_memcached('-m 32 -I 100k -o slab_reassign,lru_crawler,slab_automove=3,release_mem_sleep=1');
+my $server = new_memcached('-m 32 -I 100k -o slab_reassign,lru_crawler,slab_automove=3,release_mem_sleep=1,release_mem_start=40,release_mem_stop=10,lru_crawler_interval=5');
 {
     my $stats = mem_stats($server->sock, ' settings');
     is($stats->{slab_automove}, "3");
+    is($stats->{release_mem_sleep}, "1");
+    is($stats->{release_mem_start}, "40");
+    is($stats->{release_mem_stop}, "10");
+    is($stats->{lru_crawler_interval}, "5");
 }
 
 my $sock = $server->sock;
-
 # Fill a slab .
 my $data = 'y' x 20000; # slab 25
 
@@ -36,9 +39,9 @@ sleep 32+26;
 
 {
     my $slabs = mem_stats($sock, "slabs");
-    is($slabs->{"25:total_pages"}, 2, "slab 25 now has 2 used pages");
+    is($slabs->{"25:total_pages"}, 1, "slab 25 now has 1 used pages");
     my $items = mem_stats($sock);
-    is($items->{"slabs_freed"}, 23, "slab 25 has 23 freed pages");
+    is($items->{"slabs_freed"}, 24, "slab 25 has 24 freed pages");
 }
 
 

@@ -324,7 +324,10 @@ struct settings {
     bool flush_enabled;     /* flush_all enabled */
     char *hash_algorithm;     /* Hash algorithm in use */
     int lru_crawler_sleep;  /* Microsecond sleep between items */
-    int release_mem_sleep;  /* Second sleep between release memory */
+    int release_mem_sleep;  /* Second sleep between release each page */
+    int release_mem_start;  /* The percent of memory usage when start release memory*/
+    int release_mem_stop;   /* The percent of memory usage when stop release memory*/
+    int lru_crawler_interval; /* The interval of run the lru_crawler for all slab*/
    uint32_t lru_crawler_tocrawl; /* Number of items to crawl per run */
 };
 
