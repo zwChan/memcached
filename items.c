@@ -159,7 +159,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         }
 
         /* Expired or flushed */
-        if ((search->exptime != 0 && search->exptime < current_time)
+        if (isExpired(search)
             || (search->time <= oldest_live && oldest_live <= current_time)) {
             itemstats[id].reclaimed++;
             if ((search->it_flags & ITEM_FETCHED) == 0) {
@@ -440,9 +440,16 @@ char *do_item_cachedump(const unsigned int slabs_clsid, const unsigned int limit
         /* Copy the key since it may not be null-terminated in the struct */
         strncpy(key_temp, ITEM_key(it), it->nkey);
         key_temp[it->nkey] = 0x00; /* terminate */
-        len = snprintf(temp, sizeof(temp), "ITEM %s [%d b; %lu s]\r\n",
+        if (it->it_flags&ITEM_EXPIRE_MS){
+            len = snprintf(temp, sizeof(temp), "ITEM %s [%d b; %lu ms]\r\n",
+                       key_temp, it->nbytes - 2,
+                       (unsigned long)it->exptime);
+        } else {
+            len = snprintf(temp, sizeof(temp), "ITEM %s [%d b; %lu s]\r\n",
                        key_temp, it->nbytes - 2,
                        (unsigned long)it->exptime + process_started);
+
+        }
         if (bufcurr + len + 6 > memlimit)  /* 6 is END\r\n\0 */
             break;
         memcpy(buffer + bufcurr, temp, len);
@@ -611,7 +618,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
             if (was_found) {
                 fprintf(stderr, " -nuked by flush");
             }
-        } else if (it->exptime != 0 && it->exptime <= current_time) {
+        } else if (isExpired(it)) {
             do_item_unlink(it, hv);
             do_item_remove(it);
             it = NULL;
@@ -631,10 +638,14 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
 }
 
 item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
-                    const uint32_t hv) {
+                    const uint32_t hv, int isMs) {
     item *it = do_item_get(key, nkey, hv);
     if (it != NULL) {
         it->exptime = exptime;
+        if (isMs)
+            it->it_flags |= ITEM_EXPIRE_MS;
+        else
+            it->it_flags &= ~ITEM_EXPIRE_MS;
     }
     return it;
 }
@@ -772,7 +783,7 @@ static item *crawler_crawl_q(item *it) {
  */
 static void item_crawler_evaluate(item *search, uint32_t hv, int i) {
     rel_time_t oldest_live = settings.oldest_live;
-    if ((search->exptime != 0 && search->exptime < current_time)
+    if (isExpired(search)
         || (search->time <= oldest_live && oldest_live <= current_time)) {
         itemstats[i].crawler_reclaimed++;
 

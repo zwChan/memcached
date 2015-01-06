@@ -337,6 +337,7 @@ extern struct settings settings;
 #define ITEM_SLABBED 4
 
 #define ITEM_FETCHED 8
+#define ITEM_EXPIRE_MS 16
 
 /**
  * Structure for storing items within memcached.
@@ -496,6 +497,7 @@ extern conn **conns;
 
 /* current time of day (updated periodically) */
 extern volatile rel_time_t current_time;
+extern volatile rel_time_t current_time_ms;
 
 /* TODO: Move to slabs.h? */
 extern volatile int slab_rebalance_signal;
@@ -528,6 +530,25 @@ static inline int mutex_lock(pthread_mutex_t *mutex)
 {
     while (pthread_mutex_trylock(mutex));
     return 0;
+}
+
+
+#define REALTIME_MAXDELTA 60*60*24*30
+#define REALTIME_MAXDELTA_MS (60*60*24*1000)
+
+/*Take care of the overflow of million second*/
+static inline bool isExpired(item *it) {
+    if ((it->it_flags&ITEM_EXPIRE_MS) == 0) {
+        if (it->exptime != 0 && it->exptime <= current_time)
+            return true;
+    } else {
+        if ((it->time+REALTIME_MAXDELTA_MS/1000 > current_time)
+            || ((it->exptime <= current_time_ms) && (current_time_ms -it->exptime < REALTIME_MAXDELTA_MS))
+            || ((it->exptime > current_time_ms) && (it->exptime-current_time_ms > REALTIME_MAXDELTA_MS))
+            )
+            return true;
+    }
+    return false;
 }
 
 #define mutex_unlock(x) pthread_mutex_unlock(x)
@@ -564,7 +585,7 @@ item *item_alloc(char *key, size_t nkey, int flags, rel_time_t exptime, int nbyt
 char *item_cachedump(const unsigned int slabs_clsid, const unsigned int limit, unsigned int *bytes);
 void  item_flush_expired(void);
 item *item_get(const char *key, const size_t nkey);
-item *item_touch(const char *key, const size_t nkey, uint32_t exptime);
+item *item_touch(const char *key, const size_t nkey, uint32_t exptime, int isMs);
 int   item_link(item *it);
 void  item_remove(item *it);
 int   item_replace(item *it, item *new_it, const uint32_t hv);

@@ -144,17 +144,21 @@ static void maxconns_handler(const int fd, const short which, void *arg) {
     }
 }
 
-#define REALTIME_MAXDELTA 60*60*24*30
 
 /*
  * given time value that's either unix time or delta from current unix time, return
  * unix time. Use the fact that delta can't exceed one month (and real time value can't
  * be that low).
  */
-static rel_time_t realtime(const time_t exptime) {
+static rel_time_t realtime(const time_t exptime, int isMs) {
     /* no. of seconds in 30 days - largest possible delta exptime */
 
     if (exptime == 0) return 0; /* 0 means never expire */
+
+    if (isMs){
+        return exptime+current_time_ms;
+    }
+
 
     if (exptime > REALTIME_MAXDELTA) {
         /* if item expiration is at/before the server started, give it an
@@ -1152,7 +1156,7 @@ static void complete_incr_bin(conn *c) {
             snprintf(tmpbuf, INCR_MAX_STORAGE_LEN, "%llu",
                 (unsigned long long)req->message.body.initial);
             int res = strlen(tmpbuf);
-            it = item_alloc(key, nkey, 0, realtime(req->message.body.expiration),
+            it = item_alloc(key, nkey, 0, realtime(req->message.body.expiration,0),
                             res + 2);
 
             if (it != NULL) {
@@ -1282,7 +1286,7 @@ static void process_bin_get_or_touch(conn *c) {
         protocol_binary_request_touch *t = binary_get_request(c);
         time_t exptime = ntohl(t->message.body.expiration);
 
-        it = item_touch(key, nkey, realtime(exptime));
+        it = item_touch(key, nkey, realtime(exptime,0),0);
     } else {
         it = item_get(key, nkey);
     }
@@ -2031,7 +2035,7 @@ static void process_bin_update(conn *c) {
     }
 
     it = item_alloc(key, nkey, req->message.body.flags,
-            realtime(req->message.body.expiration), vlen+2);
+            realtime(req->message.body.expiration,0), vlen+2);
 
     if (it == 0) {
         if (! item_size_ok(nkey, req->message.body.flags, vlen + 2)) {
@@ -2150,7 +2154,7 @@ static void process_bin_flush(conn *c) {
     }
 
     if (exptime > 0) {
-        settings.oldest_live = realtime(exptime) - 1;
+        settings.oldest_live = realtime(exptime,0) - 1;
     } else {
         settings.oldest_live = current_time - 1;
     }
@@ -2374,6 +2378,8 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
                     memcpy(ITEM_data(new_it) + it->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->nbytes);
                 }
 
+                if (old_it->it_flags & ITEM_EXPIRE_MS)
+                    new_it->it_flags |= ITEM_EXPIRE_MS;
                 it = new_it;
             }
         }
@@ -3027,8 +3033,8 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
 
 static void process_update_command(conn *c, token_t *tokens, const size_t ntokens, int comm, bool handle_cas) {
     char *key;
-    size_t nkey;
-    unsigned int flags;
+    size_t nkey,nExpire;
+    unsigned int flags,isMsExpire=0;
     int32_t exptime_int = 0;
     time_t exptime;
     int vlen;
@@ -3047,6 +3053,13 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     key = tokens[KEY_TOKEN].value;
     nkey = tokens[KEY_TOKEN].length;
 
+    /*If the expire is million second*/
+    nExpire = tokens[3].length;
+    if (tokens[3].length>2 && tokens[3].value[nExpire-1]=='s' && tokens[3].value[nExpire-2]=='m'){
+        tokens[3].value[nExpire-2] = '\0';
+        isMsExpire = 1;
+    }
+
     if (! (safe_strtoul(tokens[2].value, (uint32_t *)&flags)
            && safe_strtol(tokens[3].value, &exptime_int)
            && safe_strtol(tokens[4].value, (int32_t *)&vlen))) {
@@ -3056,6 +3069,15 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
     /* Ubuntu 8.04 breaks when I pass exptime to safe_strtol */
     exptime = exptime_int;
+
+    /*No more than 60s if in million second mode*/
+    if (isMsExpire && (exptime < 0 || exptime > REALTIME_MAXDELTA_MS)){
+        out_string(c, "CLIENT_ERROR bad expire time");
+        return;
+    }
+    /*do process as million second if expire time is 0*/
+    if (exptime == 0)
+        isMsExpire = 0;
 
     /* Negative exptimes can underflow and end up immortal. realtime() will
        immediately expire values that are greater than REALTIME_MAXDELTA, but less
@@ -3081,7 +3103,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         stats_prefix_record_set(key, nkey);
     }
 
-    it = item_alloc(key, nkey, flags, realtime(exptime), vlen);
+    it = item_alloc(key, nkey, flags, realtime(exptime,isMsExpire), vlen);
 
     if (it == 0) {
         if (! item_size_ok(nkey, flags, vlen))
@@ -3106,6 +3128,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     }
     ITEM_set_cas(it, req_cas_id);
 
+    if (isMsExpire)
+        it->it_flags |= ITEM_EXPIRE_MS;
     c->item = it;
     c->ritem = ITEM_data(it);
     c->rlbytes = it->nbytes;
@@ -3115,9 +3139,10 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
 static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
-    size_t nkey;
+    size_t nkey,nExpire;
     int32_t exptime_int = 0;
     item *it;
+    int isMsExpire = 0;
 
     assert(c != NULL);
 
@@ -3131,12 +3156,22 @@ static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens
     key = tokens[KEY_TOKEN].value;
     nkey = tokens[KEY_TOKEN].length;
 
+    /*If the expire is million second*/
+     nExpire = tokens[2].length;
+     if (tokens[2].length>2 && tokens[2].value[nExpire-1]=='s' && tokens[2].value[nExpire-2]=='m'){
+         tokens[2].value[nExpire-2] = '\0';
+         isMsExpire = 1;
+     }
+
     if (!safe_strtol(tokens[2].value, &exptime_int)) {
         out_string(c, "CLIENT_ERROR invalid exptime argument");
         return;
     }
 
-    it = item_touch(key, nkey, realtime(exptime_int));
+    if (exptime_int == 0)
+        isMsExpire = 0;
+
+    it = item_touch(key, nkey, realtime(exptime_int,isMsExpire),isMsExpire);
     if (it) {
         item_update(it);
         pthread_mutex_lock(&c->thread->stats.mutex);
@@ -3286,6 +3321,8 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
         }
         memcpy(ITEM_data(new_it), buf, res);
         memcpy(ITEM_data(new_it) + res, "\r\n", 2);
+        if (it->it_flags&ITEM_EXPIRE_MS)
+            new_it->it_flags |= ITEM_EXPIRE_MS;
         item_replace(it, new_it, hv);
         // Overwrite the older item's CAS with our new CAS since we're
         // returning the CAS of the old item below.
@@ -3499,7 +3536,7 @@ static void process_command(conn *c, char *command) {
           no delay is given at all.
         */
         if (exptime > 0)
-            settings.oldest_live = realtime(exptime) - 1;
+            settings.oldest_live = realtime(exptime,0) - 1;
         else /* exptime == 0 */
             settings.oldest_live = current_time - 1;
         item_flush_expired();
@@ -4687,6 +4724,7 @@ static int server_socket_unix(const char *path, int access_mask) {
  * sizeof(time_t) > sizeof(unsigned int).
  */
 volatile rel_time_t current_time;
+volatile rel_time_t current_time_ms;
 static struct event clockevent;
 
 /* libevent uses a monotonic clock when available for event scheduling. Aside
@@ -4694,7 +4732,7 @@ static struct event clockevent;
  * Note that users who are setting explicit dates for expiration times *must*
  * ensure their clocks are correct before starting memcached. */
 static void clock_handler(const int fd, const short which, void *arg) {
-    struct timeval t = {.tv_sec = 1, .tv_usec = 0};
+    struct timeval t = {.tv_sec = 0, .tv_usec = 1000};
     static bool initialized = false;
 #if defined(HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
     static bool monotonic = false;
@@ -4727,6 +4765,7 @@ static void clock_handler(const int fd, const short which, void *arg) {
         if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
             return;
         current_time = (rel_time_t) (ts.tv_sec - monotonic_start);
+        current_time_ms = (rel_time_t)(ts.tv_nsec/1000000);
         return;
     }
 #endif
@@ -4734,6 +4773,7 @@ static void clock_handler(const int fd, const short which, void *arg) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
         current_time = (rel_time_t) (tv.tv_sec - process_started);
+        current_time_ms = (rel_time_t)(tv.tv_usec/1000);
     }
 }
 

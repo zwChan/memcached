@@ -510,12 +510,12 @@ item *item_get(const char *key, const size_t nkey) {
     return it;
 }
 
-item *item_touch(const char *key, size_t nkey, uint32_t exptime) {
+item *item_touch(const char *key, size_t nkey, uint32_t exptime, int isMs) {
     item *it;
     uint32_t hv;
     hv = hash(key, nkey);
     item_lock(hv);
-    it = do_item_touch(key, nkey, exptime, hv);
+    it = do_item_touch(key, nkey, exptime, hv, isMs);
     item_unlock(hv);
     return it;
 }
